@@ -3,9 +3,6 @@
 
 #pragma once
 
-#define FILE_IN "X:\\Programming\\MyWork\\ConsoleApplication14\\hw_enc.dll"
-#define FILE_OUT "X:\\Programming\\MyWork\\ConsoleApplication14\\hw_dec.dll"
-
 class decrypt_processor
 {
 public:
