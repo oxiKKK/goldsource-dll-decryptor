@@ -11,12 +11,12 @@ class decrypt_processor
 public:
 	static auto& get()
 	{
-		decrypt_processor decrypt;
+		static decrypt_processor decrypt;
 		return decrypt;
 	}
 
 public:
-	bool process_file(const std::filesystem::path& path, uint32_t filesize);
+	bool process_file(const std::filesystem::path& file_in, const std::filesystem::path& file_out, uint32_t filesize);
 
 private:
 	// Allocation and deallocation of the file buffer
@@ -24,7 +24,7 @@ private:
 	void deallocate_buffer();
 
 	// Write built binary into new file
-	bool write_to_file();
+	bool write_to_file(const std::filesystem::path& file_out);
 
 private:
 	byte*		m_filebuffer = nullptr;

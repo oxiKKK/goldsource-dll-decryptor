@@ -12,6 +12,13 @@ bool blob_algorithm::decrypt_file_buffer(byte* filebuffer, uint32_t length)
 
 	m_info = reinterpret_cast<blob_info_t*>(filebuffer);
 
+	// Validate magic number
+	if (!valid_info_header())
+	{
+		printf("Error: Bad blob info header!\n");
+		return false;
+	}
+
 	printf("--- Blob info header ---\n");
 	printf("  Path    : %s\n", m_info->m_szPath[0] != '\0' ? m_info->m_szPath : "none");
 	printf("  Describe: %s\n", m_info->m_szDescribe[0] != '\0' ? m_info->m_szDescribe : "none");
@@ -27,7 +34,17 @@ bool blob_algorithm::decrypt_file_buffer(byte* filebuffer, uint32_t length)
 	m_header->m_dwImageBase ^= 0x49C042D1;
 	m_header->m_dwEntryPoint -= 0x0000000C;
 	m_header->m_dwImportTable ^= 0x872C3D47;
-	m_header->m_wSectionCount++; // In blob files, there's always one section+
+
+	// Validate addresses exposed by the blob header
+	if (!valid_blob_data_header())
+	{
+		printf("Error: Bad blob data header!\n");
+		return false;
+	}
+
+	// In blob files, there's always one section+, so we increment this now
+	// so we don't have to do + 1 every time we use this afterwards.
+	m_header->m_wSectionCount++;
 	
 	printf("--- Blob data header ---\n");
 	printf("                %-10s %s\n", "VA", "RVA");
@@ -39,12 +56,6 @@ bool blob_algorithm::decrypt_file_buffer(byte* filebuffer, uint32_t length)
 	printf("  Sections    : %hu\n", m_header->m_wSectionCount);
 
 	m_sectionbase = reinterpret_cast<blob_section_t*>(filebuffer + sizeof(blob_info_t) + sizeof(blob_hdr_t));
-
-	if (!is_blob(length))
-	{
-		printf("Error: This isn't a valid blob file!\n");
-		return false;
-	}
 
 	for (uint16_t i = 0; i < m_header->m_wSectionCount; i++)
 	{
@@ -65,25 +76,46 @@ bool blob_algorithm::decrypt_file_buffer(byte* filebuffer, uint32_t length)
 	return true;
 }
 
-bool blob_algorithm::is_blob(uint32_t length)
+bool blob_algorithm::valid_info_header()
 {
-	if (length < sizeof(blob_info_t) + sizeof(blob_hdr_t))
-	{
-		printf("Error: Blob file has invalid length! (%d bytes)\n", length);
-		return false;
-	}
-
-	if (!m_header->m_wSectionCount)
-	{
-		printf("Error: Blob has no sections! (%d)\n", m_header->m_wSectionCount);
-		return false;
-	}
-
 	if (m_info->m_dwMagic != BLOB_ALGORITHM_MAGIC)
 	{
 		printf("Error: Invalid blob algorithm magic number: 0x%08X\n", m_info->m_dwMagic);
 		return false;
 	}
+
+	printf("Blob info header is fine.\n");
+
+	return true;
+}
+
+bool blob_algorithm::valid_blob_data_header()
+{
+	if (!m_header->m_dwImageBase)
+	{
+		printf("Error: Blob header exposed invalid image base!\n");
+		return false;
+	}
+
+	if (!m_header->m_dwExportPoint)
+	{
+		printf("Error: Blob header exposed invalid entry point!\n");
+		return false;
+	}
+
+	if (!m_header->m_dwImportTable)
+	{
+		printf("Error: Blob header exposed invalid import table!\n");
+		return false;
+	}
+
+	if (!m_header->m_wSectionCount)
+	{
+		printf("Error: Blob header exposed invalid section count!\n");
+		return false;
+	}
+
+	printf("Blob data header is fine.\n");
 
 	return true;
 }
@@ -98,6 +130,8 @@ void blob_algorithm::xor_buffer(byte* filebuffer, uint32_t length)
 		filebuffer[i] ^= xor_char;
 		xor_char += filebuffer[i] + 'W';
 	}
+
+	printf("Xorred file buffer with Valve's magic xor number: W (0x%02X)\n", 'W');
 }
 
 void blob_algorithm::write_section_data(byte* filebuffer, uint32_t file_alignment, std::ofstream& ofs)
@@ -123,7 +157,7 @@ void blob_algorithm::write_section_data(byte* filebuffer, uint32_t file_alignmen
 
 			ofs.write((const char*)zero_buffer, mod);
 
-			printf("Section %d isn't 4096-aligned, had to write %d bytes of alignment.\n", i, mod);
+			printf("[0x%08X] Wrote %d bytes of alignment\n", (uint32_t)ofs.tellp(), mod);
 			delete[] zero_buffer;
 		}
 	}

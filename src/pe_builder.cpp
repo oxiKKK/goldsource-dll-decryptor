@@ -111,9 +111,9 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 	m_dos_hdr.e_ovno = 0;
 	m_dos_hdr.e_oemid = 0;
 	m_dos_hdr.e_oeminfo = 0;
-	m_dos_hdr.e_lfanew = sizeof(IMAGE_DOS_HEADER) + sizeof(dos_stub);
+	m_dos_hdr.e_lfanew = sizeof(IMAGE_DOS_HEADER) + sizeof(valve_stub);
 
-	printf("  Size of DOS stub program: 0x%08X\n", sizeof(dos_stub));
+	printf("  Size of Valve stub program: 0x%08X\n", sizeof(valve_stub));
 	printf("  File address to NT headers: 0x%08X\n", m_dos_hdr.e_lfanew);
 
 	printf("DOS header done...\n");
@@ -269,41 +269,43 @@ void pe_builder::build_data_directories(byte* filebuffer, blob_hdr_t* blob_hdr, 
 {
 	printf("Building data directories...\n");
 
+	// Data directories we're able to process. Others are unattainable.
 	auto idd = &m_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 	auto edd = &m_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
 	auto rdd = &m_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_RESOURCE];
 	auto iatdd = &m_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
 
+	// We need this in order to process exports...
+	uint32_t export_last_thunk_func;
+
 	printf("Building imports...\n");
-	process_imports(filebuffer, idd, iatdd, blob_hdr, blob_sections);
+	process_imports(filebuffer, idd, iatdd, blob_hdr, blob_sections, &export_last_thunk_func);
+	
+	printf("Building exports...\n");
+	process_exports(filebuffer, edd, blob_hdr, blob_sections, export_last_thunk_func);
 
-	edd->VirtualAddress = 0x001AEC50;
-	edd->Size = 0x0000714C;
-
-	rdd->VirtualAddress = 0x01273000;
-	rdd->Size = 0x00001000;
-
-	//auto edd = &m_nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-	//
-	//printf("Building exports...\n");
-	//process_exports(filebuffer, edd, blob_hdr, blob_sections);
-	//print_data_directory("Export", edd);
+	printf("Building resources...\n");
+	process_resources(filebuffer, rdd, blob_hdr, blob_sections);
 }
 
 void pe_builder::print_data_directory(const char* name, PIMAGE_DATA_DIRECTORY idd)
 {
-	printf("--- %s descriptor ---\n", name);
+	printf("--- %s data directory ---\n", name);
 	printf("  VirtualAddress: 0x%08X\n", idd->VirtualAddress);
 	printf("  Size:           0x%08X\n", idd->Size);
 }
 
-void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IMAGE_DATA_DIRECTORY* iatdd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IMAGE_DATA_DIRECTORY* iatdd, 
+								 blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t* export_last_thunk_func)
 {
 	uint32_t iid_file_pointer = rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, blob_hdr->m_dwImportTable);
 	auto iid = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(filebuffer + iid_file_pointer);
 
 	// IAT data
 	uint32_t iat_first_thunk = ~0, iat_last_thunk = 0;
+
+	// Variables needed in order to locate export table
+	*export_last_thunk_func = 0;
 
 	printf("Found import descriptor at file offset 0x%08X\n", iid_file_pointer);
 	printf("Processing imports...\n");
@@ -324,17 +326,39 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 		if (iid->FirstThunk < iat_first_thunk)
 			iat_first_thunk = iid->FirstThunk;
 
+		// Check for furthest descriptor name
+		if (iid->Name > *export_last_thunk_func)
+			*export_last_thunk_func = iid->Name;
+
 		printf("  %-16s", name);
 		
 		uint32_t this_idd_thunks = 0;
 		while (thunk->u1.AddressOfData)
 		{
+#if 0 // We don't need to display these, but they're valid
 			// Name of the thunk is also an RVA from the image base
 			auto name = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(
 				filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, thunk->u1.AddressOfData + blob_hdr->m_dwImageBase));
 			
 			auto ordinal = thunk->u1.Ordinal;
-				
+#endif
+
+			if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Function))
+			{
+				// ...
+			}
+			else
+			{
+				const uint32_t thunk_fn_offset = thunk->u1.Function + sizeof(WORD); // Skip the second data field (i.e. Hint)
+
+				// Get furthermost address of import thunk functions. 
+				// It seems that it's common behaviour that the export table lies
+				// right after the iat. So we can do some hackyhack job in order
+				// to locate it.
+				if (thunk_fn_offset > *export_last_thunk_func)
+					*export_last_thunk_func = thunk_fn_offset;
+			}
+			
 			thunk++;
 			this_idd_thunks++; // counting only for this descriptor entry
 		}
@@ -359,11 +383,6 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 	idd->Size = sizeof(IMAGE_IMPORT_DESCRIPTOR) * (num_iid + 1); // + 1 for the null descriptor at the end
 	print_data_directory("Import", idd);
 
-	constexpr uint32_t a = offsetof(IMAGE_NT_HEADERS, OptionalHeader);
-	constexpr uint32_t b = a + offsetof(IMAGE_OPTIONAL_HEADER, DataDirectory);
-
-	printf("- import table found: %08x of %u bytes\n", blob_hdr->m_dwImportTable - blob_sections[1].m_dwVirtualAddress, idd->Size);
-
 	// IATDD
 	iatdd->VirtualAddress = iat_first_thunk; // RVA to the first thunk
 	iatdd->Size = iat_last_thunk - iat_first_thunk;
@@ -372,67 +391,129 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 	printf("  %d entries inside IAT\n", iatdd->Size / sizeof(DWORD));
 }
 
-void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t export_last_thunk_func)
 {
-#if 0
-	uint32_t ied_file_pointer = rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, blob_hdr->m_dwImportTable);
-	auto ied = reinterpret_cast<PIMAGE_EXPORT_DIRECTORY>(filebuffer + ied_file_pointer);
+	// Note:
+	//	Valve's blob file representation does not share any information about image
+	//	export table, thus it's impossible for us to locate it. However inside the
+	//	PE image, there are some common patterns that we can abuse. For example, it's
+	//	a common fact that the export table lies right after the end of import thunks, 
+	//	thus locating the last thunk in the iat and then iterating to the end of the
+	//	last routine name, we can kind of locate the export directory using this way.
+	//	This is probably the only option, since as said before, there's zero information
+	//	exposed to us from the blob headers, since there's really no point in storing
+	//	such information when we only wan't to load the file into the memory - we need
+	//	only imports for that, exports aren't needed at all.
 
-	printf("Found import descriptor at file offset 0x%08X\n", iid_file_pointer);
+	// Get the address to this location
+	byte* p = filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, export_last_thunk_func + blob_hdr->m_dwImageBase);
+	byte* p_start = p;
+
+	// Go to the end of the last thunk's functio name.
+	while (*p++);
+
+	// After we're here, there's usually one more character at the very end of the 
+	// iat, so we have to skip it
+	p++;
+
+	// Now usually there's a zone of bytes that are just null, so we skip them and
+	// right after these zero bytes should lie the export directory information.
+	while (!*p) p++;
+
+	// At this point, 'usually' once again, the Characteristics field from export
+	// descriptor is null, meaning that our loop above would just skip it. Again, 
+	// this method is really theoretical and hardcoding, so it may not work every
+	// time. So now we have to revert back 4 bytes, in order to get the start of
+	// the export directory structure.
+	p -= sizeof(DWORD);
+
+	auto ied = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(p);
+
+	printf("Had to travel %d bytes for the export directory.\n", p - p_start);
+	printf("Found export descriptor.\n");
 	printf("Processing imports...\n");
 
-	uint32_t num_iid = 0, num_thunks = 0;
-	while (iid->Name)
+	// We can use this as a sanity check...
+	if (ied->Characteristics != NULL)
 	{
-		// FirstThunk is a RVA from the image base, unlike the m_dwImportTable, which is a VA containing the image base.
-		// Same applies for Name. In this case, we have to add the image base to the calculation.
-		auto thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
-			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, iid->FirstThunk + blob_hdr->m_dwImageBase));
-
-		// RVA from image base
-		auto name = reinterpret_cast<const char*>(
-			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, iid->Name + blob_hdr->m_dwImageBase));
-
-		printf("  %-16s", name);
-
-		uint32_t this_idd_thunks = 0;
-		while (thunk->u1.AddressOfData)
-		{
-			// Name of the thunk is also an RVA from the image base
-			auto name = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(
-				filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, thunk->u1.AddressOfData + blob_hdr->m_dwImageBase));
-
-			auto ordinal = thunk->u1.Ordinal;
-
-#if 0
-			// Imports can be accessed either by name, or an ordinal.
-			if (IMAGE_SNAP_BY_ORDINAL32(ordinal))
-			{
-				printf("  %hu\n", IMAGE_ORDINAL32(ordinal));
-			}
-			else
-			{
-				printf("  %s\n", (const char*)name->Name);
-			}
-#endif
-
-			thunk++;
-			num_thunks++;
-			this_idd_thunks++; // counting only for this descriptor entry
-		}
-
-		printf(" (%-3d thunk%s)\n", this_idd_thunks, this_idd_thunks > 1 ? "s" : " ");
-
-		iid++;
-		num_iid++;
+		printf("Warning! Couldn't process exports because the export directory isn't valid!\n");
+		return;
 	}
 
-	printf("Found %d import descriptors\n", num_iid);
-	printf("Found %d thunk routines\n", num_thunks);
+	// These should be always null
+	if (ied->MajorVersion != NULL || ied->MinorVersion != NULL)
+	{
+		printf("Warning! Couldn't process exports because the versions aren't null!\n");
+		return;
+	}
 
-	idd->VirtualAddress = blob_hdr->m_dwImportTable - blob_hdr->m_dwImageBase; // VA to the image base
-	idd->Size = sizeof(IMAGE_IMPORT_DESCRIPTOR) * (num_iid + 1); // + 1 for the null descriptor at the end
-#endif
+	// We can detect if this dll has no exports using this
+	if (ied->NumberOfFunctions == NULL || ied->NumberOfNames == NULL)
+	{
+		printf("Warning! There aren't any exports in this file!\n");
+		return;
+	}
+
+	printf("Found %d entries inside export directory\n", ied->NumberOfNames);
+
+	// Following information is an RVA from the base image, meaning that we have to 
+	// add the image base to it when calculating the RVA from the start of the section.
+
+	// Pointer to functions
+	auto functions_ptr = reinterpret_cast<uint32_t*>(
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfFunctions + blob_hdr->m_dwImageBase));
+
+	// Pointer to names
+	auto names_ptr = reinterpret_cast<uint32_t*>(
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfNames + blob_hdr->m_dwImageBase));
+
+	// Pointer to ordinals. They're 16bits in size!
+	auto ordinals_ptr = reinterpret_cast<uint16_t*>(
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfNameOrdinals + blob_hdr->m_dwImageBase));
+
+	uint32_t export_last_function = 0, fn_name_size = 0;
+	for (uint32_t i = 0; i < ied->NumberOfNames; i++)
+	{
+		// Get the function name. It is stored inside a table and we can access it using this index.
+		uint32_t* fn_name_addr = reinterpret_cast<uint32_t*>(
+			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, names_ptr[i] + blob_hdr->m_dwImageBase));
+		
+		// Name of the function
+		const char* fn_name = reinterpret_cast<const char*>(fn_name_addr);
+
+		const uint32_t thunk_fn_offset = (uint32_t)fn_name_addr;
+
+		// Get furthermost address of import thunk functions. 
+		// It seems that it's common behaviour that the export table lies
+		// right after the iat. So we can do some hackyhack job in order
+		// to locate it.
+		if (thunk_fn_offset > export_last_function)
+		{
+			export_last_function = thunk_fn_offset;
+			fn_name_size = strlen(fn_name); // Get the length of the function so we can then add it into final length
+		}
+	}
+
+	// Get the delta how far away we're from the start of the section
+	p -= (DWORD)(filebuffer + blob_sections[ORD_SEC_RDATA].m_dwDataAddress);
+
+	// Now add the VA not including the base address
+	edd->VirtualAddress = (DWORD)((byte*)p + blob_sections[ORD_SEC_RDATA].m_dwVirtualAddress) - blob_hdr->m_dwImageBase;
+	edd->Size = (DWORD)((byte*)export_last_function - (byte*)ied) + fn_name_size + 1; // + 1 for the terminator char
+	print_data_directory("Export Address Table", edd);
+}
+
+void pe_builder::process_resources(byte* filebuffer, IMAGE_DATA_DIRECTORY* rdd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+{
+	if (blob_hdr->m_wSectionCount < 4)
+	{
+		printf("Cannot process resources because image doesn't have any\n");
+		return;
+	}
+
+	rdd->VirtualAddress = blob_sections[ORD_SEC_RSRC].m_dwVirtualAddress - blob_hdr->m_dwImageBase;
+	rdd->Size = blob_sections[ORD_SEC_RSRC].m_dwVirtualSize;
+	print_data_directory("Resource ", rdd);
 }
 
 void pe_builder::write_dos_header(std::ofstream& ofs)
@@ -441,7 +522,7 @@ void pe_builder::write_dos_header(std::ofstream& ofs)
 
 	printf("[0x%08X] Wrote DOS header\n", (uint32_t)ofs.tellp());
 
-	ofs.write(dos_stub, sizeof(dos_stub));
+	ofs.write(valve_stub, sizeof(valve_stub));
 
 	printf("[0x%08X] Wrote Valve (DOS) stub\n", (uint32_t)ofs.tellp());
 

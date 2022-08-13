@@ -12,14 +12,21 @@
 // The encrypted file always has @ character at this offset inside th file
 #define AT_SIGN_CHARACTER_OFFSET 60
 
-bool decrypt_processor::process_file(const std::filesystem::path& path, uint32_t filesize)
+bool decrypt_processor::process_file(const std::filesystem::path& file_in, const std::filesystem::path& file_out, uint32_t filesize)
 {
 	// Read and allocate data
-	std::ifstream ifs(path, std::ios_base::in | std::ios_base::binary);
+	std::ifstream ifs(file_in, std::ios_base::in | std::ios_base::binary);
 
 	if (ifs.bad())
 	{
 		printf("Error: Failed to open the input file!\n");
+		return false;
+	}
+
+	// Files smaller than this are just not gonna work
+	if (filesize < 4096)
+	{
+		printf("Error: File has invalid length (%d bytes)\n", filesize);
 		return false;
 	}
 
@@ -33,19 +40,19 @@ bool decrypt_processor::process_file(const std::filesystem::path& path, uint32_t
 	ifs.read((char*)m_filebuffer, filesize);
 	ifs.close();
 
+	// Decrypt the buffer, gain blob information, build pe header
 	if (!blob_algorithm::get().decrypt_file_buffer(m_filebuffer, m_buffer_size))
 	{
 		printf("Error: Failed to decrypt the file using original Valve blob algorithm!\n");
 		return false;
 	}
 
-#if 1
-	if (!write_to_file())
+	// Write everything we've built into new file with postfix _dec.dll
+	if (!write_to_file(file_out))
 	{
 		printf("Error: Couldn't write the output file!\n");
 		return false;
 	}
-#endif
 
 	// We don't need this buffer anymore
 	deallocate_buffer();
@@ -80,13 +87,11 @@ void decrypt_processor::deallocate_buffer()
 
 	free(m_filebuffer);
 	m_filebuffer = nullptr;
-
-	printf("Deallocated file buffer\n");
 }
 
-bool decrypt_processor::write_to_file()
+bool decrypt_processor::write_to_file(const std::filesystem::path& file_out)
 {
-	std::ofstream ofs(FILE_OUT, std::ios_base::out | std::ios_base::binary);
+	std::ofstream ofs(file_out, std::ios_base::out | std::ios_base::binary);
 
 	if (ofs.bad())
 	{
@@ -102,6 +107,8 @@ bool decrypt_processor::write_to_file()
 	blob_algorithm::get().write_section_data(m_filebuffer, file_alignment, ofs);
 
 	ofs.close();
+
+	printf("\nNew dll written to \"%s\"\n", file_out.filename().string().c_str());
 
 	return true;
 }

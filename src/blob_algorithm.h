@@ -12,17 +12,17 @@ struct blob_info_t
 	char	m_szPath[10];
 	char	m_szDescribe[32];
 	char	m_szCompany[22];
-	DWORD	m_dwMagic;
+	DWORD	m_dwMagic;				// Magic number that we use to identify whenether this file has been encrypted or not
 };
 
 struct blob_hdr_t
 {
 	DWORD	m_dwCheckSum;
 	WORD	m_wSectionCount;
-	DWORD	m_dwExportPoint;	// VA to some function
-	DWORD	m_dwImageBase;		// Base virtual address of this image (0x1D00000)
-	DWORD	m_dwEntryPoint;		// VA to entry point
-	DWORD	m_dwImportTable;	// VA to import table
+	DWORD	m_dwExportPoint;		// VA to some function, we don't care about that here
+	DWORD	m_dwImageBase;			// Base virtual address of this image (0x1D00000)
+	DWORD	m_dwEntryPoint;			// VA to entry point
+	DWORD	m_dwImportTable;		// VA to import table
 };
 
 struct blob_section_t
@@ -35,11 +35,6 @@ struct blob_section_t
 	DWORD	m_dwDataAddress;		// RA from the base of encrypted buffer
 
 	BOOL	m_bIsSpecial;			// Some valve thing to indicate whenether the section is special or not. Not important at all.
-};
-
-struct blob_footprint_t
-{
-	HMODULE m_hDll;
 };
 
 class blob_algorithm
@@ -58,8 +53,11 @@ public:
 	void write_section_data(byte* filebuffer, uint32_t file_alignment, std::ofstream& ofs);
 
 private:
-	// Checks if this is a valid blob file
-	bool is_blob(uint32_t length);
+	// Checks for magic number
+	bool valid_info_header();
+
+	// Checks for blob header data
+	bool valid_blob_data_header();
 
 	// Xor the entire file using 'W'
 	void xor_buffer(byte* filebuffer, uint32_t length);
