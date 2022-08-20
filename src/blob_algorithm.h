@@ -19,10 +19,10 @@ struct blob_hdr_t
 {
 	DWORD	m_dwCheckSum;
 	WORD	m_wSectionCount;
-	DWORD	m_dwExportPoint;		// RVA to some function, we don't care about that here
+	DWORD	m_dwExportPoint;		// VA to some function, we don't care about that here
 	DWORD	m_dwImageBase;			// Base virtual address of this image (0x1D00000)
-	DWORD	m_dwEntryPoint;			// RVA to entry point
-	DWORD	m_dwImportTable;		// RVA to import table
+	DWORD	m_dwEntryPoint;			// VA to entry point
+	DWORD	m_dwImportTable;		// VA to import table
 };
 
 struct blob_section_t
