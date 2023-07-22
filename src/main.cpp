@@ -8,7 +8,7 @@
 void cin_get()
 {
 	printf("Press any key to exit the application...\n");
-	std::cin.get();
+//	std::cin.get();
 }
 
 int main(int arc, char** argv)
