@@ -1,40 +1,39 @@
 #ifndef BLOB_ALHORITHM
 #define BLOB_ALHORITHM
-
 #pragma once
 
 #include <vector>
 
-#define BLOB_ALGORITHM_MAGIC 0x12345678
+// classic signature that is used with engine and game modules
+#define CLASSIC_BLOB_SIG 0x12345678
 
-struct blob_info_t
+struct FakeCOFFHeader_t
 {
-	char	m_szPath[10];
-	char	m_szDescribe[32];
-	char	m_szCompany[22];
-	DWORD	m_dwMagic;				// Magic number that we use to identify whenether this file has been encrypted or not
+	char rgchMisc[60]; 
+	int dbSignature; 
+	int nSignature; // Magic number that we use to identify whenether this file has been encrypted or not
 };
 
-struct blob_hdr_t
+struct BlobHeader_t
 {
-	DWORD	m_dwCheckSum;
-	WORD	m_wSectionCount;
-	DWORD	m_dwExportPoint;		// VA to some function, we don't care about that here
-	DWORD	m_dwImageBase;			// Base virtual address of this image (0x1D00000)
-	DWORD	m_dwEntryPoint;			// VA to entry point
-	DWORD	m_dwImportTable;		// VA to import table
+	int		nRandom;
+	int	cblobunit;
+	int	nAddressF;		// VA to some function, we don't care about that here
+	int	nImageBase;		// Base virtual address of this image (0x1D00000)
+	int	nEntryPoint;	// VA to entry point
+	int	nImportDir;		// VA to import table
 };
 
-struct blob_section_t
+struct BlobUnit_t
 {
-	DWORD	m_dwVirtualAddress;		// VA from the image base
-	DWORD	m_dwVirtualSize;		// The total size of the section when loaded into memory, in bytes. 
-									// If this value is greater than the SizeOfRawData member, the section is filled with zeroes
+	int		nAddress;	// VA from the image base
+	int		cbMemSize;	// The total size of the section when loaded into memory, in bytes. 
+						// If this value is greater than the SizeOfRawData member, the section is filled with zeroes
 
-	DWORD	m_dwDataSize;			// Raw data size of the section
-	DWORD	m_dwDataAddress;		// RA from the base of encrypted buffer
+	int		cbFileSize;	// Raw data size of the section
+	int		dbOffset;	// RA from the base of encrypted buffer
 
-	BOOL	m_bIsSpecial;			// Some valve thing to indicate whenether the section is special or not. Not important at all.
+	char	fSpecial;	// Some valve thing to indicate whenether the section is special or not. Not important at all.
 };
 
 class blob_algorithm
@@ -63,9 +62,9 @@ private:
 	void xor_buffer(byte* filebuffer, uint32_t length);
 
 private:
-	blob_info_t*			m_info;
-	blob_hdr_t*				m_header;
-	blob_section_t*			m_sectionbase;
+	FakeCOFFHeader_t*		m_fakecoff;
+	BlobHeader_t*				m_header;
+	BlobUnit_t*			m_sectionbase;
 };
 
 #endif

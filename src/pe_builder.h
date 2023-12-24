@@ -20,7 +20,7 @@ public:
 
 public:
 	// Reconstructs the PE header for new image from the blob data that we have
-	void build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_section_t* blob_sections);
+	void build_pe_header(byte* filebuffer, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections);
 	
 	void write_dos_header(std::ofstream& ofs);
 	void write_pe_section_tables(std::ofstream& ofs);
@@ -30,14 +30,14 @@ public:
 
 private:
 	// Building data directories from OptionalHeader
-	void build_data_directories(byte* filebuffer, blob_hdr_t* blob_hdr, blob_section_t* blob_sections);
+	void build_data_directories(byte* filebuffer, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections);
 	void print_data_directory(const char* name, PIMAGE_DATA_DIRECTORY idd);
 
-	void process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IMAGE_DATA_DIRECTORY* iatdd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t* export_last_thunk_func);
-	void process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t export_last_thunk_func);
-	void process_resources(byte* filebuffer, IMAGE_DATA_DIRECTORY* rdd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections);
+	void process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IMAGE_DATA_DIRECTORY* iatdd, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections, uint32_t* export_last_thunk_func);
+	void process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections, uint32_t export_last_thunk_func);
+	void process_resources(byte* filebuffer, IMAGE_DATA_DIRECTORY* rdd, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections);
 
-	uint32_t rva_to_u32_offset(blob_section_t* sectionbase, uint16_t num_sections, uint32_t rva);
+	uint32_t rva_to_u32_offset(BlobUnit_t* sectionbase, uint16_t num_sections, uint32_t rva);
 
 	// Little utility function to convert FileHeader's timestamp into actual readable string
 	std::string timestamp_as_string(std::time_t timestamp);

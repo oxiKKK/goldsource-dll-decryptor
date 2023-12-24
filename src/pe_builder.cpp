@@ -70,7 +70,7 @@ static const char valve_stub[] =
 	"\x00\x00\x00\x00\x00\x00\x00";
 
 // Get offset relative to the base address of a section
-uint32_t pe_builder::rva_to_u32_offset(blob_section_t* sectionbase, uint16_t num_sections, uint32_t rva)
+uint32_t pe_builder::rva_to_u32_offset(BlobUnit_t* sectionbase, uint16_t num_sections, uint32_t rva)
 {
 	for (uint16_t i = 0; i < num_sections; i++)
 	{
@@ -78,17 +78,17 @@ uint32_t pe_builder::rva_to_u32_offset(blob_section_t* sectionbase, uint16_t num
 
 		// Check if the address is inside boundary of this section, if
 		// yes, proceed further
-		if (sec->m_dwVirtualAddress > rva || (sec->m_dwVirtualAddress + sec->m_dwVirtualSize) <= rva)
+		if (sec->nAddress > rva || (sec->nAddress + sec->cbMemSize) <= rva)
 			continue;
 
 		// Get the relative address starting by this section
-		return (rva - sec->m_dwVirtualAddress) + sec->m_dwDataAddress;
+		return (rva - sec->nAddress) + sec->dbOffset;
 	}
 
 	return NULL;
 }
 
-void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+void pe_builder::build_pe_header(byte* filebuffer, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections)
 {
 	printf("Building PE header...\n");
 
@@ -125,7 +125,7 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 
 	// Build file header
 	m_nt_headers.FileHeader.Machine = IMAGE_FILE_MACHINE_I386;
-	m_nt_headers.FileHeader.NumberOfSections = blob_hdr->m_wSectionCount;
+	m_nt_headers.FileHeader.NumberOfSections = blob_hdr->cblobunit;
 	m_nt_headers.FileHeader.TimeDateStamp = time(nullptr);
 	m_nt_headers.FileHeader.PointerToSymbolTable = 0;
 	m_nt_headers.FileHeader.NumberOfSymbols = 0;
@@ -143,10 +143,10 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 	m_nt_headers.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR_MAGIC;
 	m_nt_headers.OptionalHeader.MajorLinkerVersion = 6;
 	m_nt_headers.OptionalHeader.MinorLinkerVersion = 0;
-	m_nt_headers.OptionalHeader.AddressOfEntryPoint = blob_hdr->m_dwEntryPoint - blob_hdr->m_dwImageBase; // VA to image's entry point
-	m_nt_headers.OptionalHeader.BaseOfCode = blob_sections[ORD_SEC_TEXT].m_dwVirtualAddress - blob_hdr->m_dwImageBase; // First is always .text
-	m_nt_headers.OptionalHeader.BaseOfData = blob_sections[ORD_SEC_RDATA].m_dwVirtualAddress - blob_hdr->m_dwImageBase; // Second is always .rdata
-	m_nt_headers.OptionalHeader.ImageBase = blob_hdr->m_dwImageBase;
+	m_nt_headers.OptionalHeader.AddressOfEntryPoint = blob_hdr->nEntryPoint - blob_hdr->nImageBase; // VA to image's entry point
+	m_nt_headers.OptionalHeader.BaseOfCode = blob_sections[ORD_SEC_TEXT].nAddress - blob_hdr->nImageBase; // First is always .text
+	m_nt_headers.OptionalHeader.BaseOfData = blob_sections[ORD_SEC_RDATA].nAddress - blob_hdr->nImageBase; // Second is always .rdata
+	m_nt_headers.OptionalHeader.ImageBase = blob_hdr->nImageBase;
 	m_nt_headers.OptionalHeader.SectionAlignment = 4096; // The alignment (in bytes) of sections when they are loaded into memory.
 	m_nt_headers.OptionalHeader.FileAlignment = 4096; // The alignment factor (in bytes) that is used to align the raw data of sections in the image file
 	m_nt_headers.OptionalHeader.MajorOperatingSystemVersion = 4;
@@ -157,7 +157,7 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 	m_nt_headers.OptionalHeader.MinorSubsystemVersion = 0;
 	m_nt_headers.OptionalHeader.Win32VersionValue = NULL;
 	m_nt_headers.OptionalHeader.SizeOfHeaders = 4096; // Usually this
-	m_nt_headers.OptionalHeader.CheckSum = blob_hdr->m_dwCheckSum; // Not sure about this?
+	m_nt_headers.OptionalHeader.CheckSum = blob_hdr->nRandom; // Not sure about this?
 	m_nt_headers.OptionalHeader.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI;
 	m_nt_headers.OptionalHeader.DllCharacteristics = NULL;
 	m_nt_headers.OptionalHeader.SizeOfStackReserve = 4096 * 256;
@@ -184,9 +184,9 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 	printf("Building section table...\n");
 
 	// Build section data for OPT header
-	for (uint16_t i = 0; i < blob_hdr->m_wSectionCount; i++)
+	for (uint16_t i = 0; i < blob_hdr->cblobunit; i++)
 	{
-		blob_section_t* sec = &blob_sections[i];
+		BlobUnit_t* sec = &blob_sections[i];
 
 		char sec_name[IMAGE_SIZEOF_SHORT_NAME];
 
@@ -204,27 +204,27 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 		const uint32_t file_alignment = m_nt_headers.OptionalHeader.FileAlignment;
 
 		// Increase individual section data
-		m_nt_headers.OptionalHeader.SizeOfImage += ALIGN_AS(sec->m_dwVirtualSize, file_alignment);
+		m_nt_headers.OptionalHeader.SizeOfImage += ALIGN_AS(sec->cbMemSize, file_alignment);
 
 		// .text
 		if (flag & IMAGE_SCN_CNT_CODE)
 		{
-			printf("  Code section %d/0x%08X bytes\n", sec->m_dwVirtualSize, sec->m_dwVirtualSize);
-			m_nt_headers.OptionalHeader.SizeOfCode += ALIGN_AS(sec->m_dwVirtualSize, file_alignment);
+			printf("  Code section %d/0x%08X bytes\n", sec->cbMemSize, sec->cbMemSize);
+			m_nt_headers.OptionalHeader.SizeOfCode += ALIGN_AS(sec->cbMemSize, file_alignment);
 		}
 
 		// .rdata
 		if (flag & IMAGE_SCN_CNT_INITIALIZED_DATA)
 		{
-			printf("  Initialized data section %d/0x%08X bytes\n", sec->m_dwVirtualSize, sec->m_dwVirtualSize);
-			m_nt_headers.OptionalHeader.SizeOfInitializedData += ALIGN_AS(sec->m_dwVirtualSize, file_alignment);
+			printf("  Initialized data section %d/0x%08X bytes\n", sec->cbMemSize, sec->cbMemSize);
+			m_nt_headers.OptionalHeader.SizeOfInitializedData += ALIGN_AS(sec->cbMemSize, file_alignment);
 		}
 
 		// .bss
 		if (flag & IMAGE_SCN_CNT_UNINITIALIZED_DATA)
 		{
-			printf("  Unitialized data section %d/0x%08X bytes\n", sec->m_dwVirtualSize, sec->m_dwVirtualSize);
-			m_nt_headers.OptionalHeader.SizeOfUninitializedData += ALIGN_AS(sec->m_dwVirtualSize, file_alignment);
+			printf("  Unitialized data section %d/0x%08X bytes\n", sec->cbMemSize, sec->cbMemSize);
+			m_nt_headers.OptionalHeader.SizeOfUninitializedData += ALIGN_AS(sec->cbMemSize, file_alignment);
 		}
 
 		// Build PE header sections
@@ -235,9 +235,9 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 		strcpy((char*)pe_sec.Name, sec_name);
 		
 		// Build up this pe_sec data
-		pe_sec.Misc.VirtualSize = sec->m_dwVirtualSize;
-		pe_sec.VirtualAddress = sec->m_dwVirtualAddress - blob_hdr->m_dwImageBase;
-		pe_sec.SizeOfRawData = ALIGN_AS(sec->m_dwDataSize, m_nt_headers.OptionalHeader.FileAlignment); // Must be aligned to the FileAlignment value
+		pe_sec.Misc.VirtualSize = sec->cbMemSize;
+		pe_sec.VirtualAddress = sec->nAddress - blob_hdr->nImageBase;
+		pe_sec.SizeOfRawData = ALIGN_AS(sec->cbFileSize, m_nt_headers.OptionalHeader.FileAlignment); // Must be aligned to the FileAlignment value
 		// For uninitialized data this is always zero
 		pe_sec.PointerToRawData = (flag & IMAGE_SCN_CNT_UNINITIALIZED_DATA) ? 0 : sec_fileoffset; // File pointer to the raw data
 		pe_sec.PointerToRelocations = 0; // File pointer
@@ -251,7 +251,7 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 		printf("  Characteristics: 0x%08X\n", pe_sec.Characteristics);
 
 		// Move to next section
-		sec_fileoffset += ALIGN_AS(sec->m_dwDataSize, 4096);
+		sec_fileoffset += ALIGN_AS(sec->cbFileSize, 4096);
 		
 		m_pe_section_table.emplace_back(pe_sec);
 	}
@@ -265,7 +265,7 @@ void pe_builder::build_pe_header(byte* filebuffer, blob_hdr_t* blob_hdr, blob_se
 	printf("Building PE header finish\n");
 }
 
-void pe_builder::build_data_directories(byte* filebuffer, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+void pe_builder::build_data_directories(byte* filebuffer, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections)
 {
 	printf("Building data directories...\n");
 
@@ -296,9 +296,9 @@ void pe_builder::print_data_directory(const char* name, PIMAGE_DATA_DIRECTORY id
 }
 
 void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IMAGE_DATA_DIRECTORY* iatdd, 
-								 blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t* export_last_thunk_func)
+								 BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections, uint32_t* export_last_thunk_func)
 {
-	uint32_t iid_file_pointer = rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, blob_hdr->m_dwImportTable);
+	uint32_t iid_file_pointer = rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, blob_hdr->nImportDir);
 	auto iid = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(filebuffer + iid_file_pointer);
 
 	// IAT data
@@ -313,14 +313,14 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 	uint32_t num_iid = 0, num_thunks = 0;
 	while (iid->Name)
 	{
-		// FirstThunk is a RVA from the image base, unlike the m_dwImportTable, which is a VA containing the image base.
+		// FirstThunk is a RVA from the image base, unlike the nImportDir, which is a VA containing the image base.
 		// Same applies for Name. In this case, we have to add the image base to the calculation.
 		auto thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
-			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, iid->FirstThunk + blob_hdr->m_dwImageBase));
+			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, iid->FirstThunk + blob_hdr->nImageBase));
 
 		// RVA from image base
 		auto name = reinterpret_cast<const char*>(
-			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, iid->Name + blob_hdr->m_dwImageBase));
+			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, iid->Name + blob_hdr->nImageBase));
 		
 		// Get the first thunk address of where the iat is
 		if (iid->FirstThunk < iat_first_thunk)
@@ -338,7 +338,7 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 #if 0 // We don't need to display these, but they're valid
 			// Name of the thunk is also an RVA from the image base
 			auto name = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(
-				filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, thunk->u1.AddressOfData + blob_hdr->m_dwImageBase));
+				filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, thunk->u1.AddressOfData + blob_hdr->nImageBase));
 			
 			auto ordinal = thunk->u1.Ordinal;
 #endif
@@ -379,7 +379,7 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 	printf("Found %d thunk routines\n", num_thunks);
 
 	// IDD
-	idd->VirtualAddress = blob_hdr->m_dwImportTable - blob_hdr->m_dwImageBase; // VA to the image base
+	idd->VirtualAddress = blob_hdr->nImportDir - blob_hdr->nImageBase; // VA to the image base
 	idd->Size = sizeof(IMAGE_IMPORT_DESCRIPTOR) * (num_iid + 1); // + 1 for the null descriptor at the end
 	print_data_directory("Import", idd);
 
@@ -391,7 +391,7 @@ void pe_builder::process_imports(byte* filebuffer, IMAGE_DATA_DIRECTORY* idd, IM
 	printf("  %d entries inside IAT\n", iatdd->Size / sizeof(DWORD));
 }
 
-void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections, uint32_t export_last_thunk_func)
+void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections, uint32_t export_last_thunk_func)
 {
 	// Note:
 	//	Valve's blob file representation does not share any information about image
@@ -406,7 +406,7 @@ void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, bl
 	//	only imports for that, exports aren't needed at all.
 
 	// Get the address to this location
-	byte* p = filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, export_last_thunk_func + blob_hdr->m_dwImageBase);
+	byte* p = filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, export_last_thunk_func + blob_hdr->nImageBase);
 	byte* p_start = p;
 
 	// Go to the end of the last thunk's functio name.
@@ -461,22 +461,22 @@ void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, bl
 
 	// Pointer to functions
 	auto functions_ptr = reinterpret_cast<uint32_t*>(
-		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfFunctions + blob_hdr->m_dwImageBase));
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, ied->AddressOfFunctions + blob_hdr->nImageBase));
 
 	// Pointer to names
 	auto names_ptr = reinterpret_cast<uint32_t*>(
-		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfNames + blob_hdr->m_dwImageBase));
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, ied->AddressOfNames + blob_hdr->nImageBase));
 
 	// Pointer to ordinals. They're 16bits in size!
 	auto ordinals_ptr = reinterpret_cast<uint16_t*>(
-		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, ied->AddressOfNameOrdinals + blob_hdr->m_dwImageBase));
+		filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, ied->AddressOfNameOrdinals + blob_hdr->nImageBase));
 
 	uint32_t export_last_function = 0, fn_name_size = 0;
 	for (uint32_t i = 0; i < ied->NumberOfNames; i++)
 	{
 		// Get the function name. It is stored inside a table and we can access it using this index.
 		uint32_t* fn_name_addr = reinterpret_cast<uint32_t*>(
-			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->m_wSectionCount, names_ptr[i] + blob_hdr->m_dwImageBase));
+			filebuffer + rva_to_u32_offset(blob_sections, blob_hdr->cblobunit, names_ptr[i] + blob_hdr->nImageBase));
 		
 		// Name of the function
 		const char* fn_name = reinterpret_cast<const char*>(fn_name_addr);
@@ -495,24 +495,24 @@ void pe_builder::process_exports(byte* filebuffer, IMAGE_DATA_DIRECTORY* edd, bl
 	}
 
 	// Get the delta how far away we're from the start of the section
-	p -= (DWORD)(filebuffer + blob_sections[ORD_SEC_RDATA].m_dwDataAddress);
+	p -= (DWORD)(filebuffer + blob_sections[ORD_SEC_RDATA].dbOffset);
 
 	// Now add the VA not including the base address
-	edd->VirtualAddress = (DWORD)((byte*)p + blob_sections[ORD_SEC_RDATA].m_dwVirtualAddress) - blob_hdr->m_dwImageBase;
+	edd->VirtualAddress = (DWORD)((byte*)p + blob_sections[ORD_SEC_RDATA].nAddress) - blob_hdr->nImageBase;
 	edd->Size = (DWORD)((byte*)export_last_function - (byte*)ied) + fn_name_size + 1; // + 1 for the terminator char
 	print_data_directory("Export Address Table", edd);
 }
 
-void pe_builder::process_resources(byte* filebuffer, IMAGE_DATA_DIRECTORY* rdd, blob_hdr_t* blob_hdr, blob_section_t* blob_sections)
+void pe_builder::process_resources(byte* filebuffer, IMAGE_DATA_DIRECTORY* rdd, BlobHeader_t* blob_hdr, BlobUnit_t* blob_sections)
 {
-	if (blob_hdr->m_wSectionCount < 4)
+	if (blob_hdr->cblobunit < 4)
 	{
 		printf("Cannot process resources because image doesn't have any\n");
 		return;
 	}
 
-	rdd->VirtualAddress = blob_sections[ORD_SEC_RSRC].m_dwVirtualAddress - blob_hdr->m_dwImageBase;
-	rdd->Size = blob_sections[ORD_SEC_RSRC].m_dwVirtualSize;
+	rdd->VirtualAddress = blob_sections[ORD_SEC_RSRC].nAddress - blob_hdr->nImageBase;
+	rdd->Size = blob_sections[ORD_SEC_RSRC].cbMemSize;
 	print_data_directory("Resource ", rdd);
 }
 
